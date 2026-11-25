@@ -1,28 +1,51 @@
-// Fungsi serverless Vercel: POST /api/agent
-// Meneruskan percakapan ke Claude API dan mengalirkan jawaban (streaming) ke kantor.
+// Fungsi serverless Vercel: /api/agent
+//   GET  → daftar model yang aktif (tanpa membuka rahasia apa pun)
+//   POST → meneruskan percakapan ke Gemini atau Claude dan mengalirkan jawaban (streaming)
 //
-// Env yang dibutuhkan (Vercel → Settings → Environment Variables):
-//   ANTHROPIC_API_KEY  — API key dari console Anthropic (jangan pernah di-commit)
-//   OFFICE_PASSCODE    — kode akses kantor, supaya orang lain tidak bisa memakai saldo API Anda
+// Env (Vercel → Settings → Environment Variables). Isi minimal SATU key:
+//   GEMINI_API_KEY     — key gratis dari Google AI Studio (aistudio.google.com)
+//   ANTHROPIC_API_KEY  — key berbayar dari console Anthropic
+//   OFFICE_PASSCODE    — kode akses kantor (wajib), supaya orang lain tidak bisa memakai kuota/saldo Anda
 // Opsional:
-//   MOCK_API=1         — mode uji lokal tanpa memanggil Claude (tanpa biaya)
+//   GEMINI_MODEL, GEMINI_MODEL_LITE — ganti nama model Gemini (boleh beberapa, dipisah koma)
+//   GEMINI_PRICE_IN, GEMINI_PRICE_OUT — tarif USD per 1 juta token bila billing Google aktif
+//   MOCK_API=1         — mode uji tanpa memanggil AI (tanpa biaya)
 
 import { timingSafeEqual } from 'node:crypto';
 import { AGENTS } from './_prompts.js';
+import { streamClaude } from './_claude.js';
+import { streamGemini } from './_gemini.js';
 
 export const config = { maxDuration: 60 };
 
-// Harga per 1 juta token (USD). Perbarui bila tarif Anthropic berubah.
+// Tarif Claude per 1 juta token (USD). Perbarui bila tarif Anthropic berubah.
 export const MODELS = {
-  hemat: { id: 'claude-haiku-5-5', label: 'Haiku 5.5', input: 0.1, output: 0.5, maxTokens: 4000 },
-  mantap: { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', input: 2, output: 10, maxTokens: 6000 },
+  gemini: { provider: 'gemini', label: 'Gemini Flash', option: 'Gratis · Gemini Flash', maxTokens: 8192 },
+  'gemini-lite': { provider: 'gemini', label: 'Gemini Flash-Lite', option: 'Gratis · Gemini Flash-Lite', maxTokens: 8192 },
+  hemat: { provider: 'claude', id: 'claude-haiku-5-5', label: 'Haiku 5.5', option: 'Hemat · Claude Haiku 5.5', input: 0.1, output: 0.5, maxTokens: 4000 },
+  mantap: { provider: 'claude', id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', option: 'Mantap · Claude Sonnet 5.5', input: 2, output: 10, maxTokens: 6000 },
 };
 
 const MAX_MESSAGES = 30;
 const MAX_TOTAL_CHARS = 120_000; // batas ukuran percakapan per permintaan (≈30–40 ribu token)
 
 export function costUSD(model, inputTokens, outputTokens) {
-  return (inputTokens * model.input + outputTokens * model.output) / 1_000_000;
+  return (inputTokens * (model.input ?? 0) + outputTokens * (model.output ?? 0)) / 1_000_000;
+}
+
+const isMock = () => process.env.MOCK_API === '1';
+export function providerReady(provider) {
+  if (isMock()) return true;
+  if (provider === 'gemini') return !!process.env.GEMINI_API_KEY;
+  if (provider === 'claude') return !!process.env.ANTHROPIC_API_KEY;
+  return false;
+}
+
+/** Model yang bisa dipakai sekarang, urut: gratis dulu. */
+export function availableModels() {
+  return Object.entries(MODELS)
+    .filter(([, m]) => providerReady(m.provider))
+    .map(([tier, m]) => ({ tier, label: m.option, provider: m.provider }));
 }
 
 function sameSecret(a, b) {
@@ -44,14 +67,17 @@ async function readJson(req) {
 function sendJson(res, status, obj) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
   res.end(JSON.stringify(obj));
 }
 
-/** Validasi isi permintaan. Mengembalikan { error } atau { agent, model, messages }. */
+/** Validasi isi permintaan. Mengembalikan { error } atau { agent, tier, model, messages }. */
 export function validate(body) {
   const agent = AGENTS[body?.agentId];
   if (!agent) return { error: 'Agen tidak dikenal.' };
-  const model = MODELS[body?.tier] ?? MODELS.hemat;
+  let tier = MODELS[body?.tier] ? body.tier : null;
+  if (!tier || !providerReady(MODELS[tier].provider)) tier = availableModels()[0]?.tier ?? 'gemini';
+  const model = MODELS[tier];
   const msgs = body?.messages;
   if (!Array.isArray(msgs) || msgs.length === 0) return { error: 'Pesan kosong.' };
   if (msgs.length > MAX_MESSAGES) return { error: `Percakapan terlalu panjang (maks ${MAX_MESSAGES} pesan). Mulai percakapan baru.` };
@@ -72,7 +98,7 @@ export function validate(body) {
   if (total > MAX_TOTAL_CHARS) {
     return { error: `Data terlalu besar (${total.toLocaleString('id-ID')} karakter, maks ${MAX_TOTAL_CHARS.toLocaleString('id-ID')}). Kecilkan file atau mulai percakapan baru.` };
   }
-  return { agent, model, messages };
+  return { agent, tier, model, messages };
 }
 
 function sse(res, obj) {
@@ -81,26 +107,31 @@ function sse(res, obj) {
 
 async function mockStream(res, agent, model, messages) {
   const last = messages.at(-1).content.slice(0, 160).replace(/\s+/g, ' ');
-  const text = `## Mode uji (MOCK_API)\n\nHalo, saya **${agent.name}**. Ini jawaban contoh tanpa memanggil Claude, jadi **tidak ada biaya**.\n\nPermintaan Anda:\n> ${last}\n\n| Metrik | Nilai |\n|---|---|\n| Model | ${model.label} |\n| Pesan | ${messages.length} |\n\nHapus \`MOCK_API\` dan isi \`ANTHROPIC_API_KEY\` untuk jawaban sungguhan.`;
+  const text = `## Mode uji (MOCK_API)\n\nHalo, saya **${agent.name}**. Ini jawaban contoh tanpa memanggil AI, jadi **tidak ada biaya**.\n\nPermintaan Anda:\n> ${last}\n\n| Metrik | Nilai |\n|---|---|\n| Model | ${model.label} |\n| Pesan | ${messages.length} |\n\nHapus \`MOCK_API\` dan isi \`GEMINI_API_KEY\` atau \`ANTHROPIC_API_KEY\` untuk jawaban sungguhan.`;
   for (const piece of text.match(/.{1,24}/gs)) {
     sse(res, { type: 'delta', text: piece });
     await new Promise((r) => setTimeout(r, 35));
   }
   const inTok = Math.ceil(messages.reduce((n, m) => n + m.content.length, 0) / 4);
-  const outTok = Math.ceil(text.length / 4);
-  sse(res, { type: 'done', usage: { input: inTok, output: outTok }, cost: 0, model: model.label, mock: true });
+  sse(res, { type: 'done', usage: { input: inTok, output: Math.ceil(text.length / 4) }, cost: 0, model: model.label, mock: true });
 }
 
 export default async function handler(req, res) {
+  if (req.method === 'GET') {
+    return sendJson(res, 200, {
+      models: availableModels(),
+      passcode: !!process.env.OFFICE_PASSCODE || isMock(),
+      mock: isMock(),
+    });
+  }
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+    res.setHeader('Allow', 'GET, POST');
     return sendJson(res, 405, { error: 'Gunakan POST.' });
   }
 
-  const mock = process.env.MOCK_API === '1';
   const passcode = process.env.OFFICE_PASSCODE;
-  if (!passcode && !mock) {
-    return sendJson(res, 500, { error: 'OFFICE_PASSCODE belum diatur di server.' });
+  if (!passcode && !isMock()) {
+    return sendJson(res, 500, { error: 'OFFICE_PASSCODE belum diatur di server (Vercel → Settings → Environment Variables).' });
   }
   if (passcode && !sameSecret(req.headers['x-office-code'], passcode)) {
     return sendJson(res, 401, { error: 'Kode akses salah.' });
@@ -114,10 +145,10 @@ export default async function handler(req, res) {
   }
   const v = validate(body);
   if (v.error) return sendJson(res, 400, { error: v.error });
-  const { agent, model, messages } = v;
+  const { agent, tier, model, messages } = v;
 
-  if (!mock && !process.env.ANTHROPIC_API_KEY) {
-    return sendJson(res, 500, { error: 'ANTHROPIC_API_KEY belum diatur di server.' });
+  if (!providerReady(model.provider)) {
+    return sendJson(res, 500, { error: 'Belum ada API key AI di server. Isi GEMINI_API_KEY (gratis) atau ANTHROPIC_API_KEY di Vercel, lalu redeploy.' });
   }
 
   res.statusCode = 200;
@@ -125,102 +156,31 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  if (mock) {
+  if (isMock()) {
     await mockStream(res, agent, model, messages);
     return res.end();
   }
 
-  let upstream;
-  try {
-    upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: model.id,
-        max_tokens: model.maxTokens,
-        stream: true,
-        // System prompt panjang di-cache supaya tugas berikutnya lebih murah.
-        system: [{ type: 'text', text: agent.system, cache_control: { type: 'ephemeral' } }],
-        messages,
-      }),
+  const common = {
+    system: agent.system,
+    messages,
+    onDelta: (text) => sse(res, { type: 'delta', text }),
+    onError: (error) => sse(res, { type: 'error', error }),
+  };
+  const r =
+    model.provider === 'gemini'
+      ? await streamGemini({ ...common, tier, maxTokens: model.maxTokens })
+      : await streamClaude({ ...common, model });
+
+  if (r) {
+    sse(res, {
+      type: 'done',
+      usage: { input: r.inputTokens, output: r.outputTokens },
+      cost: r.cost,
+      model: r.label,
+      truncated: r.truncated,
+      free: !!r.free,
     });
-  } catch (e) {
-    sse(res, { type: 'error', error: 'Gagal menghubungi Claude API: ' + e.message });
-    return res.end();
   }
-
-  if (!upstream.ok) {
-    let detail = '';
-    try {
-      const j = await upstream.json();
-      detail = j?.error?.message ?? '';
-    } catch { /* abaikan */ }
-    const hint = {
-      401: 'API key tidak valid.',
-      402: 'Saldo API habis — isi ulang di console Anthropic.',
-      429: 'Terlalu banyak permintaan atau batas pengeluaran tercapai. Coba lagi nanti.',
-      529: 'Server Claude sedang sibuk. Coba lagi sebentar lagi.',
-    }[upstream.status] ?? `Claude API error ${upstream.status}.`;
-    sse(res, { type: 'error', error: `${hint} ${detail}`.trim() });
-    return res.end();
-  }
-
-  // Terjemahkan event SSE Anthropic menjadi event sederhana untuk klien.
-  let inputTokens = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let outputTokens = 0;
-  let stopReason = null;
-  const decoder = new TextDecoder();
-  let buffer = '';
-  try {
-    for await (const chunk of upstream.body) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
-        const block = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const dataLine = block.split('\n').find((l) => l.startsWith('data:'));
-        if (!dataLine) continue;
-        let ev;
-        try {
-          ev = JSON.parse(dataLine.slice(5).trim());
-        } catch {
-          continue;
-        }
-        if (ev.type === 'message_start') {
-          const u = ev.message?.usage ?? {};
-          inputTokens = u.input_tokens ?? 0;
-          cacheRead = u.cache_read_input_tokens ?? 0;
-          cacheWrite = u.cache_creation_input_tokens ?? 0;
-        } else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-          sse(res, { type: 'delta', text: ev.delta.text });
-        } else if (ev.type === 'message_delta') {
-          outputTokens = ev.usage?.output_tokens ?? outputTokens;
-          stopReason = ev.delta?.stop_reason ?? stopReason;
-        } else if (ev.type === 'error') {
-          sse(res, { type: 'error', error: ev.error?.message ?? 'Error dari Claude API.' });
-        }
-      }
-    }
-  } catch (e) {
-    sse(res, { type: 'error', error: 'Aliran jawaban terputus: ' + e.message });
-  }
-
-  // Cache read ±0,1× dan cache write ±1,25× harga input (perkiraan konservatif).
-  const cost =
-    costUSD(model, inputTokens, outputTokens) +
-    (cacheRead * model.input * 0.1 + cacheWrite * model.input * 1.25) / 1_000_000;
-  sse(res, {
-    type: 'done',
-    usage: { input: inputTokens + cacheRead + cacheWrite, output: outputTokens },
-    cost,
-    model: model.label,
-    truncated: stopReason === 'max_tokens',
-  });
   res.end();
 }

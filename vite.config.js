@@ -7,7 +7,7 @@ function localApi(mode) {
     name: 'kantor-local-api',
     configureServer(server) {
       const env = loadEnv(mode, process.cwd(), '');
-      for (const k of ['ANTHROPIC_API_KEY', 'OFFICE_PASSCODE', 'MOCK_API']) {
+      for (const k of ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'GEMINI_MODEL_LITE', 'OFFICE_PASSCODE', 'MOCK_API']) {
         if (env[k] !== undefined) process.env[k] = env[k];
       }
       server.middlewares.use('/api/agent', async (req, res) => {

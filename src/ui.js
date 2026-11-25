@@ -3,7 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { AGENTS, agentById } from './agents.js';
 import { costs, limit, accessCode, convo, emit, on, fmtUSD } from './store.js';
-import { runAgent } from './api.js';
+import { runAgent, getModels } from './api.js';
 import { fileToAgentText } from './data.js';
 
 const $ = (id) => document.getElementById(id);
@@ -17,6 +17,7 @@ const state = {
   controllers: {}, // id → AbortController
   files: {}, // id → lampiran yang belum terkirim
   tier: Object.fromEntries(AGENTS.map((a) => [a.id, a.tier ?? 'hemat'])),
+  models: null, // [{tier,label,provider}] dari server; null = belum dimuat
   near: null,
 };
 
@@ -216,7 +217,7 @@ function assistantBubble(agent, m, idx) {
   if (m.meta) {
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = [m.meta.model, m.meta.mock ? 'uji' : fmtUSD(m.meta.cost ?? 0), m.meta.truncated ? 'terpotong' : '']
+    meta.textContent = [m.meta.model, m.meta.mock ? 'uji' : m.meta.free ? 'gratis' : fmtUSD(m.meta.cost ?? 0), m.meta.truncated ? 'terpotong' : '']
       .filter(Boolean)
       .join(' · ');
     tools.append(meta);
@@ -304,13 +305,36 @@ function renderAttach() {
   }
 }
 
+function fillTierSelect(agent) {
+  const sel = $('tier');
+  sel.innerHTML = '';
+  const models = state.models;
+  if (!models) {
+    sel.append(new Option('Memuat model…', ''));
+    sel.disabled = true;
+    return;
+  }
+  if (models.length === 0) {
+    sel.append(new Option('Belum ada API key', ''));
+    sel.disabled = true;
+    return;
+  }
+  for (const m of models) sel.append(new Option(m.label, m.tier));
+  // Pakai pilihan terakhir bila masih tersedia; kalau tidak, model pertama (gratis didahulukan).
+  if (!models.some((m) => m.tier === state.tier[agent.id])) {
+    const prefer = agent.tier && models.find((m) => m.tier === agent.tier);
+    state.tier[agent.id] = (prefer ?? models[0]).tier;
+  }
+  sel.value = state.tier[agent.id];
+  sel.disabled = !agent.active;
+}
+
 function renderComposer() {
   const agent = agentById(state.current);
   const busy = !!state.controllers[agent.id];
   const disabled = !agent.active;
   $('input').disabled = disabled;
-  $('tier').disabled = disabled;
-  $('tier').value = state.tier[agent.id];
+  fillTierSelect(agent);
   $('attach-label').classList.toggle('disabled', disabled || !agent.acceptsFile);
   $('send').disabled = disabled;
   $('send').textContent = busy ? 'Stop ■' : 'Kirim ➤';
@@ -376,6 +400,10 @@ async function send() {
     $('input').focus();
     return;
   }
+  if (state.models && state.models.length === 0) {
+    toast('Belum ada API key AI di server. Isi GEMINI_API_KEY (gratis) di Vercel → Settings → Environment Variables, lalu redeploy.', 7000);
+    return;
+  }
   if (costs.today() >= limit.get()) {
     toast(`Batas biaya hari ini ($${limit.get().toFixed(2)}) tercapai. Naikkan batas lewat kotak biaya di kiri atas bila perlu.`, 5000);
     return;
@@ -422,7 +450,7 @@ async function send() {
         },
       });
       if (!r.text.trim()) throw Object.assign(new Error('Agen tidak mengembalikan jawaban.'), { status: 502 });
-      hist.push({ role: 'assistant', content: r.text, meta: { cost: r.cost, model: r.model, truncated: r.truncated, mock: r.mock } });
+      hist.push({ role: 'assistant', content: r.text, meta: { cost: r.cost, model: r.model, truncated: r.truncated, mock: r.mock, free: r.free } });
       costs.add(r.cost);
       if (r.truncated) toast('Jawaban terpotong karena terlalu panjang. Ketik "lanjutkan" untuk meneruskan.', 5000);
       return 'ok';
@@ -556,7 +584,15 @@ function setupPrompt() {
 
 /* ------------------------------------------------------------------ init */
 
+async function loadModels() {
+  const info = await getModels();
+  state.models = info?.models ?? [];
+  if (state.current) renderComposer();
+  if (info && !info.passcode) toast('Server belum diatur: OFFICE_PASSCODE kosong di Vercel.', 6000);
+}
+
 export function initUI() {
+  loadModels();
   renderCosts();
   renderRoster();
   setupLimitPop();

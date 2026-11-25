@@ -71,5 +71,16 @@ export async function runAgent({ agentId, tier, messages, code, onDelta, signal 
     err.cost = done?.cost ?? 0;
     throw err;
   }
-  return { text, cost: done?.cost ?? 0, usage: done?.usage, model: done?.model, truncated: done?.truncated, mock: done?.mock };
+  return { text, cost: done?.cost ?? 0, usage: done?.usage, model: done?.model, truncated: done?.truncated, mock: done?.mock, free: done?.free };
+}
+
+/** Model yang aktif di server (ditentukan oleh API key yang diisi di Vercel). */
+export async function getModels() {
+  try {
+    const r = await fetch('/api/agent', { headers: { Accept: 'application/json' } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
 }

@@ -12,10 +12,21 @@ Kantor 2D tempat **agen AI bekerja sebagai NPC**. Anda berjalan ke meja agen, me
 ## Cara kerja
 
 ```
-Browser (Phaser 3)  ──POST /api/agent──▶  Fungsi serverless Vercel  ──▶  Claude API
-  kantor, panel,       agentId + pesan       memilih system prompt,        Haiku 5.5 / Sonnet 5.5
+Browser (Phaser 3)  ──POST /api/agent──▶  Fungsi serverless Vercel  ──▶  Gemini API (gratis)
+  kantor, panel,       agentId + pesan       memilih system prompt,        atau Claude API (berbayar)
   baca Excel/CSV       + kode akses          menyimpan API key
 ```
+
+Isi **minimal satu** key AI. Pilihan model di panel otomatis mengikuti key yang diisi:
+
+| Pilihan | Butuh | Biaya |
+|---|---|---|
+| Gratis · Gemini Flash / Flash-Lite | `GEMINI_API_KEY` | gratis dalam kuota harian AI Studio |
+| Hemat · Claude Haiku 5.5 | `ANTHROPIC_API_KEY` | ±$0,004 per tugas sedang |
+| Mantap · Claude Sonnet 5.5 | `ANTHROPIC_API_KEY` | ±$0,07 per tugas sedang |
+
+> Catatan tier gratis Gemini: data yang dikirim dapat dipakai Google untuk meningkatkan produknya. Untuk data penjualan yang rahasia, pertimbangkan Claude atau Gemini berbayar.
+> Nama model Gemini bisa diganti tanpa ubah kode lewat env `GEMINI_MODEL` / `GEMINI_MODEL_LITE` (boleh beberapa, dipisah koma); bila model tidak ada atau kuotanya habis, model cadangan dicoba otomatis.
 
 - **API key hanya ada di server** (env Vercel). Kode di browser tidak pernah melihatnya.
 - **Kode akses** (`OFFICE_PASSCODE`) mencegah orang lain yang tahu URL-nya menghabiskan saldo API Anda.
@@ -25,10 +36,12 @@ Browser (Phaser 3)  ──POST /api/agent──▶  Fungsi serverless Vercel  �
 
 ## Deploy gratis ke Vercel (±10 menit)
 
-1. Buat API key di **console.anthropic.com → Settings → API Keys**, lalu isi saldo kecil (mis. $5). Di **Settings → Limits**, pasang *spend limit* bulanan sebagai batas keras.
+1. Buat API key:
+   - **Gratis:** di **aistudio.google.com → Get API key → Create API key**.
+   - **Claude (opsional):** di **console.anthropic.com → Settings → API Keys**, isi saldo kecil, dan pasang *spend limit* di Settings → Limits.
 2. Masuk ke **vercel.com** dengan akun GitHub → **Add New… → Project** → pilih repo `Kantor-Virtual` → **Import**. Framework terdeteksi otomatis sebagai Vite.
 3. Sebelum klik **Deploy**, buka **Environment Variables** dan isi:
-   - `ANTHROPIC_API_KEY` = API key dari langkah 1
+   - `GEMINI_API_KEY` dan/atau `ANTHROPIC_API_KEY` = API key dari langkah 1
    - `OFFICE_PASSCODE` = kode akses pilihan Anda (minimal 8 karakter, jangan dipakai di tempat lain)
 4. Klik **Deploy**. Buka URL `*.vercel.app` yang diberikan, dekati meja agen, tekan **E**, lalu masukkan kode akses saat diminta.
 
@@ -53,7 +66,7 @@ npm test                      # uji unit
 | Tutup panel | `Esc` | ✕ |
 | Kirim tugas | `Enter` (`Shift+Enter` untuk baris baru) | Kirim |
 
-Model bisa dipilih per agen: **Hemat** (Haiku 5.5, ±$0,004 per tugas sedang) atau **Mantap** (Sonnet 5.5, ±$0,07 per tugas sedang).
+Model bisa dipilih per agen di bawah kotak tugas.
 
 ## Menambah agen baru
 
@@ -64,7 +77,9 @@ Model bisa dipilih per agen: **Hemat** (Haiku 5.5, ±$0,004 per tugas sedang) at
 ## Struktur
 
 ```
-api/agent.js          fungsi serverless: validasi, kode akses, streaming ke Claude, hitung biaya
+api/agent.js          fungsi serverless: validasi, kode akses, pilih penyedia, hitung biaya
+api/_gemini.js        streaming Gemini + model cadangan
+api/_claude.js        streaming Claude
 api/_prompts.js       system prompt tiap agen
 src/game/OfficeScene.js  ruangan, perabot, agen, pemain, kamera
 src/game/textures.js  semua grafis pixel-art digambar dengan kode (tanpa aset)
