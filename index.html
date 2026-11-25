@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#16141c" />
+    <title>Kantor Virtual · Al Hijaz</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏢</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Amiri+Quran&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="game"></div>
+
+      <header id="hud">
+        <div class="hud-brand">
+          <span class="hud-logo">🏢</span>
+          <div>
+            <div class="hud-title">Kantor Virtual</div>
+            <div class="hud-sub">Al Hijaz · ruang kerja agen AI</div>
+          </div>
+        </div>
+        <button id="hud-cost" class="hud-cost" type="button" title="Atur batas biaya harian">
+          <span class="hud-cost-label">Biaya hari ini</span>
+          <span class="hud-cost-value"><b id="cost-today">$0.000</b> / <span id="cost-limit">$0.50</span></span>
+          <span class="hud-meter"><i id="cost-meter"></i></span>
+          <span class="hud-cost-month">Bulan ini: <span id="cost-month">$0.000</span></span>
+        </button>
+        <ul id="roster" class="roster" aria-label="Daftar agen"></ul>
+      </header>
+
+      <div id="limit-pop" class="pop" hidden>
+        <label for="limit-input">Batas biaya harian (USD)</label>
+        <div class="pop-row">
+          <input id="limit-input" type="number" min="0.05" step="0.05" inputmode="decimal" />
+          <button id="limit-save" class="btn btn-primary" type="button">Simpan</button>
+        </div>
+        <p class="pop-note">Batas ini dicek di perangkat ini. Untuk batas keras, pasang juga <i>spend limit</i> di console Anthropic.</p>
+      </div>
+
+      <button id="prompt" class="prompt" type="button" hidden></button>
+
+      <div id="hint" class="hint">
+        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / klik lantai untuk berjalan · <kbd>E</kbd> bicara dengan agen
+      </div>
+
+      <aside id="panel" class="panel" aria-hidden="true">
+        <div class="panel-head">
+          <div class="panel-avatar" id="panel-icon">📊</div>
+          <div class="panel-titles">
+            <h2 id="panel-name">Agen</h2>
+            <p id="panel-role"></p>
+          </div>
+          <button id="panel-new" class="icon-btn" type="button" title="Percakapan baru">⟲</button>
+          <button id="panel-close" class="icon-btn" type="button" title="Tutup (Esc)">✕</button>
+        </div>
+        <div id="panel-chips" class="chips"></div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="attach-chip" class="attach-chip" hidden>
+          <span id="attach-text"></span>
+          <button id="attach-remove" class="icon-btn sm" type="button" title="Lepas file">✕</button>
+        </div>
+        <form id="composer" class="composer">
+          <textarea id="input" rows="3" placeholder="Tulis tugas untuk agen…  (Enter kirim, Shift+Enter baris baru)"></textarea>
+          <div class="composer-bar">
+            <label class="btn btn-ghost" id="attach-label" title="Lampirkan export Excel/CSV">
+              📎 File
+              <input id="file" type="file" accept=".xlsx,.xls,.csv,.txt" hidden />
+            </label>
+            <select id="tier" title="Pilih model">
+              <option value="hemat">Hemat · Haiku 5.5</option>
+              <option value="mantap">Mantap · Sonnet 5.5</option>
+            </select>
+            <span id="convo-cost" class="convo-cost"></span>
+            <button id="send" class="btn btn-primary" type="submit">Kirim ➤</button>
+          </div>
+        </form>
+      </aside>
+
+      <div id="gate" class="gate" hidden>
+        <form id="gate-form" class="gate-card">
+          <div class="gate-icon">🔐</div>
+          <h2>Kode akses kantor</h2>
+          <p>Masukkan kode akses yang Anda atur di Vercel (<code>OFFICE_PASSCODE</code>). Kode disimpan di browser ini saja.</p>
+          <input id="gate-input" type="password" autocomplete="current-password" placeholder="Kode akses" required />
+          <p id="gate-error" class="gate-error" hidden></p>
+          <div class="pop-row">
+            <button id="gate-cancel" class="btn btn-ghost" type="button">Batal</button>
+            <button class="btn btn-primary" type="submit">Masuk</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="toast" class="toast" hidden></div>
+
+      <div id="loading" class="loading">
+        <div class="loading-card">
+          <div class="loading-spin"></div>
+          <p>Menyiapkan kantor…</p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
